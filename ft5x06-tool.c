@@ -91,6 +91,7 @@ static inline void msleep(int delay) { usleep(delay*1000); }
 
 struct ft5x06_ts {
 	int fd;
+	uint8_t bus;
 	uint8_t addr;
 	uint8_t chip_id;
 	uint8_t	fw_ver;
@@ -120,7 +121,7 @@ struct ft5x06_fw_update_info ft5x06_fwu_info[] = {
 	{FT5x26_ID, "ft5x26", 5, 0,  4, 250, 0x54, 0x2c, 10, 3000, 0x1800},
 };
 
-static int ft5x06_i2c_read(int fd, int addr, uint8_t *wrbuf, uint16_t wrlen,
+static int ft5x06_i2c_read(struct ft5x06_ts *ts, uint8_t *wrbuf, uint16_t wrlen,
 			   uint8_t *rdbuf, uint16_t rdlen)
 {
 	struct i2c_rdwr_ioctl_data data;
@@ -128,19 +129,19 @@ static int ft5x06_i2c_read(int fd, int addr, uint8_t *wrbuf, uint16_t wrlen,
 
 	if (wrlen > 0) {
 		struct i2c_msg msgs[] = {
-			{ addr, 0, wrlen, wrbuf },
-			{ addr, I2C_M_RD, rdlen, rdbuf },
+			{ ts->addr, 0, wrlen, wrbuf },
+			{ ts->addr, I2C_M_RD, rdlen, rdbuf },
 		};
 		data.msgs  = msgs;
 		data.nmsgs = ARRAY_SIZE(msgs);
-		ret = ioctl(fd, I2C_RDWR, &data);
+		ret = ioctl(ts->fd, I2C_RDWR, &data);
 	} else {
 		struct i2c_msg msgs[] = {
-			{ addr, I2C_M_RD, rdlen, rdbuf },
+			{ ts->addr, I2C_M_RD, rdlen, rdbuf },
 		};
 		data.msgs  = msgs;
 		data.nmsgs = ARRAY_SIZE(msgs);
-		ret = ioctl(fd, I2C_RDWR, &data);
+		ret = ioctl(ts->fd, I2C_RDWR, &data);
 	}
 
 	if (ret < 0)
@@ -149,66 +150,66 @@ static int ft5x06_i2c_read(int fd, int addr, uint8_t *wrbuf, uint16_t wrlen,
 	return ret;
 }
 
-static int ft5x06_i2c_write(int fd, int addr, uint8_t *buf, uint16_t len)
+static int ft5x06_i2c_write(struct ft5x06_ts *ts, uint8_t *buf, uint16_t len)
 {
 	int ret;
 	struct i2c_rdwr_ioctl_data data;
 	struct i2c_msg msgs[] = {
-		{ addr, 0, len, buf },
+		{ ts->addr, 0, len, buf },
 	};
 
 	data.msgs  = msgs;
 	data.nmsgs = ARRAY_SIZE(msgs);
 
-	ret = ioctl(fd, I2C_RDWR, &data);
+	ret = ioctl(ts->fd, I2C_RDWR, &data);
 	if (ret < 0)
 		ERR("Error %d", ret);
 
 	return ret;
 }
 
-static void ft5x06_write_reg(int fd, int addr, uint8_t regnum, uint8_t value)
+static void ft5x06_write_reg(struct ft5x06_ts *ts, uint8_t regnum, uint8_t value)
 {
 	uint8_t regnval[] = {
 		regnum,
 		value
 	};
 
-	ft5x06_i2c_write(fd, addr, regnval, ARRAY_SIZE(regnval));
+	ft5x06_i2c_write(ts, regnval, ARRAY_SIZE(regnval));
 }
 
-static char *ft5x06_get_name(unsigned chip_id)
+static char *ft5x06_get_name(struct ft5x06_ts *ts)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(ft5x06_fwu_info); i++)
-		if (chip_id == ft5x06_fwu_info[i].chip_id)
+		if (ts->chip_id == ft5x06_fwu_info[i].chip_id)
 			return ft5x06_fwu_info[i].fts_name;
 
 	return NULL;
 }
 
-static struct ft5x06_fw_update_info *ft5x06_get_info(unsigned chip_id)
+static struct ft5x06_fw_update_info *ft5x06_get_info(struct ft5x06_ts *ts)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(ft5x06_fwu_info); i++)
-		if (chip_id == ft5x06_fwu_info[i].chip_id)
+		if (ts->chip_id == ft5x06_fwu_info[i].chip_id)
 			return &ft5x06_fwu_info[i];
 
 	return NULL;
 }
 
 /* Undocumented function but necessary for ft5426 */
-static void ft5x26_hid_to_i2c(int fd, int addr)
+static void ft5x26_hid_to_i2c(struct ft5x06_ts *ts)
 {
 	uint8_t packet_buf[3] = { 0xeb, 0xaa, 0x09 };
 
-	ft5x06_i2c_write(fd, addr, packet_buf, 3);
+	ft5x06_i2c_write(ts, packet_buf, 3);
 
 	memset(packet_buf, 0, ARRAY_SIZE(packet_buf));
 
-	ft5x06_i2c_read(fd, addr, packet_buf, 0, packet_buf, 3);
+	ft5x06_i2c_read(ts, packet_buf, 0, packet_buf, 3);
 	if ((0xeb != packet_buf[0]) || (0xaa != packet_buf[1]) ||
 	    (0x08 != packet_buf[2]))
 		DBG("Failed %x %x %x", packet_buf[0],
@@ -217,9 +218,9 @@ static void ft5x26_hid_to_i2c(int fd, int addr)
 	msleep(10);
 }
 
-static int ft5x06_read_id(int fd, int addr, int chip_id)
+static int ft5x06_read_id(struct ft5x06_ts *ts)
 {
-	struct ft5x06_fw_update_info *info = ft5x06_get_info(chip_id);
+	struct ft5x06_fw_update_info *info = ft5x06_get_info(ts);
 	uint8_t reg_val[2] = {0};
 	uint8_t packet_buf[4];
 
@@ -227,7 +228,7 @@ static int ft5x06_read_id(int fd, int addr, int chip_id)
 	packet_buf[0] = FT_READ_ID_REG;
 	packet_buf[1] = packet_buf[2] = packet_buf[3] = 0x00;
 
-	ft5x06_i2c_read(fd, addr, packet_buf, 4, reg_val, 2);
+	ft5x06_i2c_read(ts, packet_buf, 4, reg_val, 2);
 	if (reg_val[0] != info->upgrade_id_1
 	    || reg_val[1] != info->upgrade_id_2) {
 		ERR("READ-ID not ok: %x %x", reg_val[0], reg_val[1]);
@@ -237,26 +238,26 @@ static int ft5x06_read_id(int fd, int addr, int chip_id)
 	return 0;
 }
 
-static void ft5x06_reset_ctpm(int fd, int addr, int chip_id)
+static void ft5x06_reset_ctpm(struct ft5x06_ts *ts)
 {
-	struct ft5x06_fw_update_info *info = ft5x06_get_info(chip_id);
+	struct ft5x06_fw_update_info *info = ft5x06_get_info(ts);
 
-	ft5x06_write_reg(fd, addr, FT_RST_CMD_REG1, FT_UPGRADE_AA);
+	ft5x06_write_reg(ts, FT_RST_CMD_REG1, FT_UPGRADE_AA);
 	msleep(info->delay_aa);
-	ft5x06_write_reg(fd, addr, FT_RST_CMD_REG1, FT_UPGRADE_55);
+	ft5x06_write_reg(ts, FT_RST_CMD_REG1, FT_UPGRADE_55);
 	msleep(info->delay_55);
 }
 
-static void ft5x06_reset_fw(int fd, int addr)
+static void ft5x06_reset_fw(struct ft5x06_ts *ts)
 {
 	uint8_t packet_buf = FT_REG_RESET_FW;
 
-	ft5x06_i2c_write(fd, addr, &packet_buf, 1);
+	ft5x06_i2c_write(ts, &packet_buf, 1);
 
 	msleep(100);
 }
 
-static int ft5x06_init_upgrade(int fd, int addr, int chip_id)
+static int ft5x06_init_upgrade(struct ft5x06_ts *ts)
 {
 	int i, ret;
 	uint8_t packet_buf[4];
@@ -264,15 +265,15 @@ static int ft5x06_init_upgrade(int fd, int addr, int chip_id)
 	for (i = 0; i < FT_UPGRADE_LOOP; i++) {
 		/* Step 1: Reset CTPM */
 		LOG("Reset CTPM");
-		ft5x06_reset_ctpm(fd, addr, chip_id);
+		ft5x06_reset_ctpm(ts);
 
 		/* Step 2: Enter upgrade mode */
 		LOG("Enter upgrade mode");
-		if (chip_id == FT5x26_ID)
-			ft5x26_hid_to_i2c(fd, addr);
+		if (ts->chip_id == FT5x26_ID)
+			ft5x26_hid_to_i2c(ts);
 		packet_buf[0] = FT_UPGRADE_55;
 		packet_buf[1] = FT_UPGRADE_AA;
-		ret = ft5x06_i2c_write(fd, addr, packet_buf, 2);
+		ret = ft5x06_i2c_write(ts, packet_buf, 2);
 		if (ret < 0) {
 			ERR("failed to enter upgrade mode (%d)", ret);
 			continue;
@@ -280,7 +281,7 @@ static int ft5x06_init_upgrade(int fd, int addr, int chip_id)
 
 		/* Step 3: Check READ-ID */
 		LOG("Check READ-ID");
-		if (ft5x06_read_id(fd, addr, chip_id) == 0)
+		if (ft5x06_read_id(ts) == 0)
 			break;
 	}
 
@@ -290,7 +291,7 @@ static int ft5x06_init_upgrade(int fd, int addr, int chip_id)
 	return 0;
 }
 
-static void ft5x06_fw_send_packet(int fd, int addr, uint8_t command,
+static void ft5x06_fw_send_packet(struct ft5x06_ts *ts, uint8_t command,
 				  uint32_t offset, uint32_t length,
 				  const uint8_t *data, uint8_t *ecc)
 {
@@ -309,24 +310,24 @@ static void ft5x06_fw_send_packet(int fd, int addr, uint8_t command,
 		*ecc ^= packet_buf[6 + i];
 	}
 
-	ft5x06_i2c_write(fd, addr, packet_buf, length + 6);
-#if 0 /* Used for non FT5426 */
-	msleep(FT_FW_PKT_DLY_MS);
-#else
-	for (i = 0; i < 5; i++) {
-		uint8_t reg_val[2] = {0};
-		uint32_t pkt_num = offset / FT_FW_PKT_LEN;
+	ft5x06_i2c_write(ts, packet_buf, length + 6);
+	if (ts->chip_id == FT5x26_ID)
+		for (i = 0; i < 5; i++) {
+			uint8_t reg_val[2] = {0};
+			uint32_t pkt_num = offset / FT_FW_PKT_LEN;
 
-		msleep(5);
-		packet_buf[0] = FT_FLASH_STATUS;
-		ft5x06_i2c_read(fd, addr, packet_buf, 1, reg_val, 2);
-		if ((pkt_num + 0x1000) == (((reg_val[0]) << 8) | reg_val[1]))
-			break;
-	}
-#endif
+			msleep(5);
+			packet_buf[0] = FT_FLASH_STATUS;
+			ft5x06_i2c_read(ts, packet_buf, 1, reg_val, 2);
+			if ((pkt_num + 0x1000) ==
+			    (((reg_val[0]) << 8) | reg_val[1]))
+				break;
+		}
+	else
+		msleep(FT_FW_PKT_DLY_MS);
 }
 
-static int ft5x06_fw_receive_packet(int fd, int addr, uint8_t command,
+static int ft5x06_fw_receive_packet(struct ft5x06_ts *ts, uint8_t command,
 				    uint32_t offset, uint32_t length,
 				    uint8_t *data)
 {
@@ -338,18 +339,18 @@ static int ft5x06_fw_receive_packet(int fd, int addr, uint8_t command,
 	packet_buf[2] = (uint8_t) (offset >> 8);
 	packet_buf[3] = (uint8_t) offset;
 
-	return ft5x06_i2c_read(fd, addr, packet_buf, ARRAY_SIZE(packet_buf),
+	return ft5x06_i2c_read(ts, packet_buf, ARRAY_SIZE(packet_buf),
 			       data, length);
 }
 
-static int ft5x06_fw_read(int fd, int addr, int chip_id, int outfd)
+static int ft5x06_fw_read(struct ft5x06_ts *ts, int outfd)
 {
 	int i, ret;
 	uint32_t size = FT_FW_MAX_SIZE;
 	uint8_t packet_buf[4];
 	uint8_t data[FT_FW_PKT_READ_LEN];
 
-	ret = ft5x06_init_upgrade(fd, addr, chip_id);
+	ret = ft5x06_init_upgrade(ts);
 	if (ret < 0)
 		return ret;
 
@@ -361,7 +362,7 @@ static int ft5x06_fw_read(int fd, int addr, int chip_id, int outfd)
 			length = (size - i);
 
 		msleep(10);
-		ret = ft5x06_fw_receive_packet(fd, addr, FT_FW_READ_REG, i,
+		ret = ft5x06_fw_receive_packet(ts, FT_FW_READ_REG, i,
 					       length, data);
 		if (ret < 0)
 			return ret;
@@ -370,16 +371,16 @@ static int ft5x06_fw_read(int fd, int addr, int chip_id, int outfd)
 
 	LOG("Reset the new FW");
 	packet_buf[0] = FT_REG_RESET_FW;
-	ft5x06_i2c_write(fd, addr, packet_buf, 1);
+	ft5x06_i2c_write(ts, packet_buf, 1);
 	msleep(100);
 
 	return 0;
 }
 
-static int ft5x06_fw_upgrade(int fd, int addr, int chip_id,
-			     const uint8_t *data, uint32_t data_len)
+static int ft5x06_fw_upgrade(struct ft5x06_ts *ts, const uint8_t *data,
+			     uint32_t data_len)
 {
-	struct ft5x06_fw_update_info *info = ft5x06_get_info(chip_id);
+	struct ft5x06_fw_update_info *info = ft5x06_get_info(ts);
 	int i, ret;
 	uint8_t reg_val[4] = {0};
 	uint8_t packet_buf[6];
@@ -388,16 +389,16 @@ static int ft5x06_fw_upgrade(int fd, int addr, int chip_id,
 	if (info == NULL)
 		return -ENODEV;
 
-	ret = ft5x06_init_upgrade(fd, addr, chip_id);
+	ret = ft5x06_init_upgrade(ts);
 	if (ret < 0)
 		return ret;
 
 	LOG("Erase current app");
 	packet_buf[0] = FT_ERASE_APP_REG;
-	ft5x06_i2c_write(fd, addr, packet_buf, 1);
-	if (chip_id != FT5x26_ID) {
+	ft5x06_i2c_write(ts, packet_buf, 1);
+	if (ts->chip_id != FT5x26_ID) {
 		packet_buf[0] = FT_ERASE_PANEL_REG;
-		ft5x06_i2c_write(fd, addr, packet_buf, 1);
+		ft5x06_i2c_write(ts, packet_buf, 1);
 	}
 	msleep(info->delay_erase_flash);
 
@@ -406,7 +407,7 @@ static int ft5x06_fw_upgrade(int fd, int addr, int chip_id,
 	packet_buf[1] = (uint8_t)((data_len >> 16) & 0xFF);
 	packet_buf[2] = (uint8_t)((data_len >> 8) & 0xFF);
 	packet_buf[3] = (uint8_t)(data_len & 0xFF);
-	ft5x06_i2c_write(fd, addr, packet_buf, 4);
+	ft5x06_i2c_write(ts, packet_buf, 4);
 
 	LOG("Write firmware to CTPM flash");
 	for (i = 0; i < data_len; i += FT_FW_PKT_LEN) {
@@ -415,7 +416,7 @@ static int ft5x06_fw_upgrade(int fd, int addr, int chip_id,
 		if ((data_len - i) < FT_FW_PKT_LEN)
 			length = (data_len - i);
 
-		ft5x06_fw_send_packet(fd, addr, FT_FW_START_REG, i,
+		ft5x06_fw_send_packet(ts, FT_FW_START_REG, i,
 				      length, data, &ecc);
 	}
 
@@ -446,14 +447,14 @@ static int ft5x06_fw_upgrade(int fd, int addr, int chip_id,
 #else
 	packet_buf[0] = FT_REG_ECC;
 #endif
-	ft5x06_i2c_read(fd, addr, packet_buf, 1, reg_val, 1);
+	ft5x06_i2c_read(ts, packet_buf, 1, reg_val, 1);
 	if (reg_val[0] != ecc) {
 		ERR("ECC error %02x vs. %02x", reg_val[0], ecc);
 		return -EIO;
 	}
 
 	LOG("Reset the new FW");
-	ft5x06_reset_fw(fd, addr);
+	ft5x06_reset_fw(ts);
 
 	return 0;
 }
@@ -476,27 +477,25 @@ static void show_help(const char *name)
 
 int main(int argc, const char *argv[])
 {
+	struct ft5x06_ts ts = {-1, 2, 0x38, 0xff, 0xff};
 	const char *input = NULL, *output = NULL;
 	char dev[16];
 	uint8_t *buffer;
 	uint8_t wbuf, rbuf;
-	int fd, ret;
+	int ret;
 	int arg_count = 1;
-	int bus = 2;
-	int addr = 0x38;
-	int chip_id = -1;
 
 	/* Parse all parameters */
 	while (arg_count < argc) {
 		if ((strcmp(argv[arg_count], "-a") == 0)
 		    || (strcmp(argv[arg_count], "--address") == 0)) {
-			addr = strtol(argv[++arg_count], NULL, 16);
+			ts.addr = strtol(argv[++arg_count], NULL, 16);
 		} else if ((strcmp(argv[arg_count], "-b") == 0)
 			   || (strcmp(argv[arg_count], "--bus") == 0)) {
-			bus = strtol(argv[++arg_count], NULL, 10);
+			ts.bus = strtol(argv[++arg_count], NULL, 10);
 		} else if ((strcmp(argv[arg_count], "-c") == 0)
 			   || (strcmp(argv[arg_count], "--chipid") == 0)) {
-			chip_id = strtol(argv[++arg_count], NULL, 16);
+			ts.chip_id = strtol(argv[++arg_count], NULL, 16);
 		} else if ((strcmp(argv[arg_count], "-i") == 0)
 			   || (strcmp(argv[arg_count], "--input") == 0)) {
 			input = argv[++arg_count];
@@ -510,45 +509,46 @@ int main(int argc, const char *argv[])
 		arg_count++;
 	}
 
-	sprintf(dev, "/dev/i2c-%d", bus);
+	sprintf(dev, "/dev/i2c-%d", ts.bus);
 	LOG("Opening %s", dev);
-	fd = open(dev, O_RDWR);
-	if (fd < 0) {
+	ts.fd = open(dev, O_RDWR);
+	if (ts.fd < 0) {
 		LOG("Couldn't open %s: %s", dev, strerror(errno));
-		return fd;
+		return ts.fd;
 	}
 
-	LOG("Setting addr to %#02x", addr);
-	ret = ioctl(fd, I2C_SLAVE_FORCE, addr);
+	LOG("Setting addr to %#02x", ts.addr);
+	ret = ioctl(ts.fd, I2C_SLAVE_FORCE, ts.addr);
 	if (ret != 0) {
 		LOG("Couldn't set slave addr: %s", strerror(errno));
 		return -1;
 	}
 
 	/* If chip ID isn't forced, detect it */
-	if (chip_id < 0) {
+	if (ts.chip_id == 0xff) {
 		wbuf = ID_G_CIPHER;
-		ret = ft5x06_i2c_read(fd, addr, &wbuf, 1, &rbuf, 1);
+		ret = ft5x06_i2c_read(&ts, &wbuf, 1, &rbuf, 1);
 		if (ret < 0) {
 			ERR("Couldn't get ID (%d)", ret);
 			goto end;
 		}
-		chip_id = rbuf;
+		ts.chip_id = rbuf;
 	}
-	if (!ft5x06_get_name(chip_id)) {
-		ERR("Unsupported chip ID: %x", chip_id);
+	if (!ft5x06_get_name(&ts)) {
+		ERR("Unsupported chip ID: %x", ts.chip_id);
 		goto end;
 	}
-	LOG("Chip ID: %#x (%s)", chip_id, ft5x06_get_name(chip_id));
+	LOG("Chip ID: %#x (%s)", ts.chip_id, ft5x06_get_name(&ts));
 
 	/* Get current firmware version */
 	wbuf = ID_G_FIRMID;
-	ret = ft5x06_i2c_read(fd, addr, &wbuf, 1, &rbuf, 1);
+	ret = ft5x06_i2c_read(&ts, &wbuf, 1, &rbuf, 1);
 	if (ret < 0) {
 		ERR("Couldn't get ID (%d)", ret);
 		goto end;
 	}
-	LOG("Firmware version: %d.0.0", rbuf);
+	ts.fw_ver = rbuf;
+	LOG("Firmware version: %d.0.0", ts.fw_ver);
 
 	if (!input && !output) {
 		LOG("Nothing to do (read or write)");
@@ -562,7 +562,7 @@ int main(int argc, const char *argv[])
 			ERR("Unable to open file %s", output);
 			goto end;
 		}
-		ret = ft5x06_fw_read(fd, addr, chip_id, outfd);
+		ret = ft5x06_fw_read(&ts, outfd);
 		if (ret < 0)
 			ERR("Failed to read FW");
 		close(outfd);
@@ -587,13 +587,13 @@ int main(int argc, const char *argv[])
 			close(infd);
 			goto end;
 		}
-		ret = ft5x06_fw_upgrade(fd, addr, chip_id, buffer, sb.st_size);
+		ret = ft5x06_fw_upgrade(&ts, buffer, sb.st_size);
 		if (ret < 0)
 			ERR("Failed to flash FW");
 		close(infd);
 		munmap(buffer, sb.st_size);
 	}
 end:
-	close(fd);
+	close(ts.fd);
 	return 0;
 }
