@@ -116,8 +116,6 @@ struct ft5x06_fw_update_info {
  * https://github.com/focaltech-systems/drivers-input-touchscreen-FTS_driver
  */
 struct ft5x06_fw_update_info ft5x06_fwu_info[] = {
-	{FT5x06_ID, "ft5x06", 5, 1, 50,  30, 0x79, 0x03, 10, 2000, 0x0000},
-	{FT5x16_ID, "ft5x16", 5, 1, 50,  30, 0x79, 0x07, 10, 1500, 0x0000},
 	{FT5x26_ID, "ft5x26", 5, 0,  4, 250, 0x54, 0x2c, 10, 3000, 0x1800},
 };
 
